@@ -20,7 +20,7 @@
 
 use std::{
     sync::{
-        mpsc::{Receiver, SyncSender},
+        mpsc::{Receiver, RecvError, SyncSender},
         Arc, Mutex,
     },
     time::Duration,
@@ -106,10 +106,12 @@ impl Worker {
     /// The first message sent to this thread must be `ReInit`, this function panics if any other
     /// message is sent first.
     pub fn run(sender: SyncSender<FromWorker>, receiver: Receiver<ToWorker>) -> Result<()> {
-        let mut w = match receiver.recv().unwrap() { // Unwrap: just die, if sender is gone.
-            ToWorker::ReInit { peer_id, addrs }
+        let mut w = match receiver.recv() {
+            Ok(ToWorker::ReInit { peer_id, addrs })
                 => Worker::new(peer_id, addrs),
-            r
+            Err(RecvError)
+                => return,
+            Ok(r)
                 => panic!("You have to initialize the service (ReInit message) prior to using it, thus we are not handling request: {:#?}", r),
         };
 

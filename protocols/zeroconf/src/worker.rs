@@ -26,11 +26,11 @@ use std::{
     time::Duration,
 };
 
-use futures::prelude::*;
 use zeroconf::{MdnsService, ServiceRegistration, TxtRecord};
+// Necessary traits:
+use zeroconf::prelude::*;
 
 use libp2p_core::{multiaddr::Protocol, Multiaddr, PeerId};
-use libp2p_swarm::{NetworkBehaviour, ProtocolsHandler};
 
 use crate::error::Error;
 use crate::Result;
@@ -58,6 +58,8 @@ pub enum ToWorker {
 pub enum FromWorker {
     /// Service registration has finished with the given `Result`.
     ServiceRegistered(zeroconf::Result<ServiceRegistration>),
+    /// Thread quit due to some error.
+    QuitWithError(Error),
 }
 
 impl Worker {
@@ -67,7 +69,7 @@ impl Worker {
     pub fn new(
         peer_id: &PeerId,
         addrs: Vec<Multiaddr>,
-        sender: SyncSender<FromWorker>,
+        sender: &SyncSender<FromWorker>,
     ) -> Result<Worker> {
         let ports = addrs.clone().into_iter().filter_map(get_tcp_udp_port);
         let port = ports
@@ -94,7 +96,7 @@ impl Worker {
         }));
         service.set_context(Box::new(context));
         service.set_txt_record(txt_record);
-        service
+        Ok(Worker { service })
     }
 
     /// Run the worker.
@@ -105,12 +107,21 @@ impl Worker {
     ///
     /// The first message sent to this thread must be `ReInit`, this function panics if any other
     /// message is sent first.
-    pub fn run(sender: SyncSender<FromWorker>, receiver: Receiver<ToWorker>) -> Result<()> {
+    pub fn run(sender: SyncSender<FromWorker>, receiver: Receiver<ToWorker>) {
+        match Worker::run_inner(&sender, receiver) {
+            Ok(()) => return,
+            Err(err) => sender
+                .send(FromWorker::QuitWithError(err))
+                .expect("Main thread should still be alive, I would like to report my errors."),
+        }
+    }
+
+    fn run_inner(sender: &SyncSender<FromWorker>, receiver: Receiver<ToWorker>) -> Result<()> {
         let mut w = match receiver.recv() {
             Ok(ToWorker::ReInit { peer_id, addrs })
-                => Worker::new(peer_id, addrs),
+                => Worker::new(&peer_id, addrs, sender)?,
             Err(RecvError)
-                => return,
+                => return Ok(()),
             Ok(r)
                 => panic!("You have to initialize the service (ReInit message) prior to using it, thus we are not handling request: {:#?}", r),
         };
@@ -119,7 +130,9 @@ impl Worker {
 
         loop {
             match receiver.try_recv() {
-                Ok(ToWorker::ReInit { peer_id, addrs }) => w = Worker::new(peer_id, addrs),
+                Ok(ToWorker::ReInit { peer_id, addrs }) => {
+                    w = Worker::new(&peer_id, addrs, sender)?
+                }
                 Ok(ToWorker::Quit) => break,
                 Err(std::sync::mpsc::TryRecvError::Empty) => (),
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => break,

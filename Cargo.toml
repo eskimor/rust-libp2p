@@ -116,6 +116,7 @@ members = [
     "protocols/plaintext",
     "protocols/request-response",
     "protocols/secio",
+    "protocols/zeroconf",
     "swarm",
     "transports/dns",
     "transports/tcp",

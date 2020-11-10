@@ -19,11 +19,17 @@
 // DEALINGS IN THE SOFTWARE.
 
 use std::{
+    time::Duration,
     sync::{
-        mpsc::{Receiver, RecvError, SyncSender},
         Arc, Mutex,
     },
-    time::Duration,
+};
+
+use futures::{
+    task::Context,
+    channel::mpsc::{
+        Receiver, Sender
+    },
 };
 
 use zeroconf::{MdnsService, ServiceRegistration, TxtRecord};
@@ -48,6 +54,7 @@ pub enum ToWorker {
         peer_id: PeerId,
         addrs: Vec<Multiaddr>,
     },
+    Poll(Context),
     /// Quit this worker.
     ///
     /// The `run` function will return to its caller upon reception of this message.
@@ -107,7 +114,7 @@ impl Worker {
     ///
     /// The first message sent to this thread must be `ReInit`, this function panics if any other
     /// message is sent first.
-    pub fn run(sender: SyncSender<FromWorker>, receiver: Receiver<ToWorker>) {
+    pub fn poll(sender: Sender<FromWorker>, receiver: Receiver<ToWorker>) {
         match Worker::run_inner(&sender, receiver) {
             Ok(()) => return,
             Err(err) => sender
